@@ -1,0 +1,11 @@
+RewriteEngine On
+RewriteBase /vue/
+
+RewriteCond %{REQUEST_URI} ^/vue/api/ [NC]
+RewriteRule ^ - [L]
+
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+RewriteRule ^ index.html [L]
