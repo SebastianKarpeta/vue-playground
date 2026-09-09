@@ -9,7 +9,7 @@ const emit = defineEmits(['select'])
 
 <template>
   <div>
-    <h1 class="text-2xl font-bold mb-4">Projekty</h1>
+    <h1 class="text-2xl font-bold mb-4">Projekty (v2)</h1>
     <ul>
       <li
           v-for="p in projects"
