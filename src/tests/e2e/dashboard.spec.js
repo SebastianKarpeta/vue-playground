@@ -1,21 +1,35 @@
 import { test, expect } from '@playwright/test'
 
-test('nawigacja projekt -> milestone -> runy', async ({ page }) => {
+test('nawigacja projekt -> milestone -> run -> test przez selecty', async ({ page }) => {
   await page.goto('/')
 
-  const projects = page.getByTestId('project-item')
-  await expect(projects.first()).toBeVisible()
+  const projectSelect = page.getByLabel('Projekt')
+  const milestoneSelect = page.getByLabel('Milestone')
+  const runSelect = page.getByLabel('Run')
 
-  await projects.filter({ hasText: 'Example project' }).click()
+  await expect(milestoneSelect).toBeDisabled()
+  await expect(runSelect).toBeDisabled()
 
-  const milestones = page.getByTestId('milestone-item')
-  await expect(milestones.first()).toBeVisible()
+  await projectSelect.selectOption({ label: 'Example project' })
 
-  await milestones.filter({ hasText: 'Release 1.0' }).click()
+  await expect(milestoneSelect).toBeEnabled()
+  await expect(runSelect).toBeDisabled()
 
-  const runs = page.getByTestId('run-item')
-  await expect(runs.first()).toBeVisible()
+  await milestoneSelect.selectOption({ label: 'Release 1.0' })
 
-  expect(page.url()).toContain('/vue/project/')
+  await expect(runSelect).toBeEnabled()
   expect(page.url()).toContain('/milestone/')
+
+  await runSelect.selectOption({ label: 'Test Run 21/06/2026' })
+
+  const tests = page.getByTestId('test-item')
+  await expect(tests.first()).toBeVisible()
+  expect(page.url()).toContain('/run/')
+
+  await tests.first().click()
+
+  await expect(page.getByTestId('test-modal-backdrop')).toBeVisible()
+
+  await page.getByTestId('test-modal-close').click()
+  await expect(page.getByTestId('test-modal-backdrop')).not.toBeVisible()
 })
