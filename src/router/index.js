@@ -7,6 +7,8 @@ const router = createRouter({
         { path: '/', name: 'dashboard', component: Dashboard },
         { path: '/project/:projectId', name: 'project', component: Dashboard },
         { path: '/project/:projectId/milestone/:milestoneId', name: 'milestone', component: Dashboard },
+        { path: '/project/:projectId/milestone/:milestoneId/run/:runId', name: 'run', component: Dashboard },
+        { path: '/project/:projectId/run/:runId', name: 'run-no-milestone', component: Dashboard },
     ],
 })
 
