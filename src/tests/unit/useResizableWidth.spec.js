@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { defineComponent, ref, h } from 'vue'
 import { useResizableWidth } from '../../composables/useResizableWidth'
 
-const COOKIE_NAME = 'test_panels_width'
+const COOKIE_NAME = 'test_content_width'
 
 function clearCookie(name) {
   document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
@@ -17,11 +17,10 @@ function mockRect(el, width) {
 
 const TestComponent = defineComponent({
   setup(_, { expose }) {
-    const elA = ref(null)
-    const elB = ref(null)
-    const { startResize, resizingEl } = useResizableWidth(COOKIE_NAME, [elA, elB], 300)
-    expose({ elA, elB, startResize, resizingEl })
-    return () => h('div', [h('div', { ref: elA }, 'A'), h('div', { ref: elB }, 'B')])
+    const contentEl = ref(null)
+    const { startResize } = useResizableWidth(COOKIE_NAME, contentEl, 300)
+    expose({ contentEl, startResize })
+    return () => h('div', { ref: contentEl }, 'content')
   },
 })
 
@@ -30,58 +29,67 @@ describe('useResizableWidth', () => {
     clearCookie(COOKIE_NAME)
   })
 
-  it('stosuje domyślną szerokość na obu elementach, gdy nie ma cookie', () => {
+  it('stosuje domyślną szerokość, gdy nie ma cookie', () => {
     const wrapper = mount(TestComponent)
-    expect(wrapper.vm.elA.style.width).toBe('300px')
-    expect(wrapper.vm.elB.style.width).toBe('300px')
+    expect(wrapper.vm.contentEl.style.width).toBe('300px')
   })
 
   it('przywraca szerokość z cookie przy montowaniu', () => {
     document.cookie = `${COOKIE_NAME}=555`
     const wrapper = mount(TestComponent)
-    expect(wrapper.vm.elA.style.width).toBe('555px')
-    expect(wrapper.vm.elB.style.width).toBe('555px')
+    expect(wrapper.vm.contentEl.style.width).toBe('555px')
   })
 
-  it('podczas przeciągania zmienia na żywo tylko przeciągany element', () => {
+  it('podczas przeciągania zmienia szerokość na żywo', () => {
     const wrapper = mount(TestComponent)
-    const { elA, elB, startResize } = wrapper.vm
-    mockRect(elA, 300)
+    const { contentEl, startResize } = wrapper.vm
+    mockRect(contentEl, 300)
 
-    startResize({ clientX: 100, preventDefault: () => {} }, elA)
-    expect(wrapper.vm.resizingEl).toBe(elA)
-
+    startResize({ clientX: 100, preventDefault: () => {} })
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: 150 }))
 
-    expect(elA.style.width).toBe('350px')
-    expect(elB.style.width).toBe('300px')
+    expect(contentEl.style.width).toBe('350px')
   })
 
-  it('po puszczeniu myszki synchronizuje drugi element i zapisuje cookie', () => {
+  it('po puszczeniu myszki zapisuje finalną szerokość w cookie', () => {
     const wrapper = mount(TestComponent)
-    const { elA, elB, startResize } = wrapper.vm
-    mockRect(elA, 300)
+    const { contentEl, startResize } = wrapper.vm
+    mockRect(contentEl, 300)
 
-    startResize({ clientX: 100, preventDefault: () => {} }, elA)
+    startResize({ clientX: 100, preventDefault: () => {} })
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: 200 }))
-    mockRect(elA, 400)
+    mockRect(contentEl, 400)
 
     window.dispatchEvent(new MouseEvent('mouseup'))
 
-    expect(elA.style.width).toBe('400px')
-    expect(elB.style.width).toBe('400px')
-    expect(wrapper.vm.resizingEl).toBe(null)
+    expect(contentEl.style.width).toBe('400px')
     expect(document.cookie).toContain(`${COOKIE_NAME}=400`)
   })
 
   it('nie pozwala zejść poniżej minimalnej szerokości', () => {
     const wrapper = mount(TestComponent)
-    const { elA, startResize } = wrapper.vm
-    mockRect(elA, 300)
+    const { contentEl, startResize } = wrapper.vm
+    mockRect(contentEl, 300)
 
-    startResize({ clientX: 100, preventDefault: () => {} }, elA)
+    startResize({ clientX: 100, preventDefault: () => {} })
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: -1000 }))
 
-    expect(elA.style.width).toBe('280px')
+    expect(contentEl.style.width).toBe('280px')
+  })
+
+  it('nie pozwala rozciągnąć szerzej niż szerokość okna (żeby nie psuć wyśrodkowania)', () => {
+    const originalWidth = window.innerWidth
+    window.innerWidth = 800
+
+    const wrapper = mount(TestComponent)
+    const { contentEl, startResize } = wrapper.vm
+    mockRect(contentEl, 300)
+
+    startResize({ clientX: 100, preventDefault: () => {} })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 5000 }))
+
+    expect(contentEl.style.width).toBe(`${800 - 48}px`)
+
+    window.innerWidth = originalWidth
   })
 })
