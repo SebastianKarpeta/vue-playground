@@ -74,6 +74,84 @@ describe('TestList', () => {
         expect(doneWrapper.find('[data-testid="tests-details-loading"]').exists()).toBe(false)
     })
 
+    it('loadingBlockNav=true blokuje WSZYSTKIE interaktywne elementy: Wstecz/Dalej, sortowanie, filtr daty, rozmiar strony, wyszukiwanie i klik w wiersz', async () => {
+        const wrapper = mount(TestList, {
+            props: {
+                tests: [{ id: 1, title: 'Test A', status_id: 1, case_id: 10 }],
+                hasNext: true,
+                hasPrev: true,
+                loadingBlockNav: true,
+            },
+        })
+
+        expect(wrapper.find('[data-testid="tests-prev"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-next"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="sort-created"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="sort-modified"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="filter-date-field-created"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="filter-date-from"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-page-size"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-search"]').attributes('disabled')).toBeDefined()
+
+        await wrapper.find('[data-testid="test-item"]').trigger('click')
+        expect(wrapper.emitted('select')).toBeFalsy()
+    })
+
+    it('loadingBlockNav=true blokuje też numerowaną paginację w trybie clientPaginate', () => {
+        const tests = Array.from({ length: 60 }, (_, i) => ({ id: i + 1, title: `Test ${i + 1}`, status_id: 1, case_id: i + 1 }))
+        const wrapper = mount(TestList, {
+            props: { tests, clientPaginate: true, page: 2, loadingBlockNav: true },
+        })
+
+        expect(wrapper.find('[data-testid="tests-prev"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-next"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-page-1"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('loadingBlockNav=false (domyślnie) zostawia Wstecz/Dalej i sortowanie sterowane normalnymi warunkami', () => {
+        const wrapper = mount(TestList, {
+            props: {
+                tests: [{ id: 1, title: 'Test A', status_id: 1, case_id: 10 }],
+                hasNext: true,
+                hasPrev: true,
+            },
+        })
+
+        expect(wrapper.find('[data-testid="tests-next"]').attributes('disabled')).toBeUndefined()
+        expect(wrapper.find('[data-testid="sort-created"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('testsLoading=true blokuje WSZYSTKIE interaktywne elementy (szukanie, filtry dat, sortowanie, rozmiar strony, paginację, klik w wiersz) — inaczej niż loadingBlockNav', async () => {
+        const wrapper = mount(TestList, {
+            props: {
+                tests: [{ id: 1, title: 'Test A', status_id: 1, case_id: 10 }],
+                hasNext: true,
+                hasPrev: true,
+                testsLoading: true,
+            },
+        })
+
+        expect(wrapper.find('[data-testid="tests-search"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-page-size"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="filter-date-field-created"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="filter-date-from"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="sort-created"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="sort-modified"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-prev"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.find('[data-testid="tests-next"]').attributes('disabled')).toBeDefined()
+
+        await wrapper.find('[data-testid="test-item"]').trigger('click')
+        expect(wrapper.emitted('select')).toBeFalsy()
+    })
+
+    it('testsLoading=true zamienia "Brak testów pasujących do filtrów" na spinner z tekstem "Ładowanie testów…"', () => {
+        const wrapper = mount(TestList, { props: { tests: [], testsLoading: true } })
+
+        expect(wrapper.find('[data-testid="tests-loading-spinner"]').exists()).toBe(true)
+        expect(wrapper.text()).toContain('Ładowanie testów…')
+        expect(wrapper.text()).not.toContain('Brak testów pasujących do filtrów')
+    })
+
     it('zmiana selecta rozmiaru strony emituje change-page-size z liczbą', async () => {
         const wrapper = mount(TestList, {
             props: {
@@ -322,5 +400,42 @@ describe('TestList', () => {
         const items = wrapper.findAll('[data-testid="test-item"]')
         expect(items.length).toBeGreaterThan(5)
         expect(items[0].text()).toContain('Test 1')
+    })
+
+    it('clientPaginate=true: samo odświeżenie danych (ta sama liczba stron) NIE resetuje strony (regresja: Odśwież zrzucał ze strony 5 na 1)', async () => {
+        const tests = Array.from({ length: 45 }, (_, i) => ({ id: i + 1, title: `Test ${i + 1}`, status_id: 1 }))
+        const wrapper = mount(TestList, { props: { tests, clientPaginate: true, pageSize: 20, page: 1 } })
+
+        await clickAndApplyPage(wrapper, '[data-testid="tests-page-3"]')
+        expect(wrapper.find('[data-testid="test-item"]').text()).toContain('Test 41')
+        const emitsBeforeRefresh = (wrapper.emitted('update:page') ?? []).length
+
+        // symulacja "Odśwież" w trybie pełnym: rodzic podmienia całą tablicę
+        // (nowa referencja), ale to wciąż te same 45 testów / 3 strony
+        const refreshedTests = tests.map((t) => ({ ...t }))
+        await wrapper.setProps({ tests: refreshedTests })
+
+        expect((wrapper.emitted('update:page') ?? []).length).toBe(emitsBeforeRefresh)
+        expect(wrapper.find('[data-testid="test-item"]').text()).toContain('Test 41')
+    })
+
+    it('clientPaginate=true: gdy odświeżone dane mają mniej stron, bieżąca strona zostaje ściągnięta do ostatniej ważnej', async () => {
+        const tests = Array.from({ length: 45 }, (_, i) => ({ id: i + 1, title: `Test ${i + 1}`, status_id: 1 }))
+        const wrapper = mount(TestList, { props: { tests, clientPaginate: true, pageSize: 20, page: 1 } })
+
+        await clickAndApplyPage(wrapper, '[data-testid="tests-page-3"]')
+        expect(wrapper.find('[data-testid="test-item"]').text()).toContain('Test 41')
+
+        // dane "skurczyły się" do 25 testów (2 strony) — strona 3 już nie istnieje
+        const shrunkTests = Array.from({ length: 25 }, (_, i) => ({ id: i + 1, title: `Test ${i + 1}`, status_id: 1 }))
+        await wrapper.setProps({ tests: shrunkTests })
+
+        const emitted = wrapper.emitted('update:page')
+        expect(emitted).toBeTruthy()
+        const newPage = emitted[emitted.length - 1][0]
+        expect(newPage).toBe(2)
+        await wrapper.setProps({ page: newPage })
+
+        expect(wrapper.findAll('[data-testid="test-item"]')).toHaveLength(5)
     })
 })
