@@ -1,3 +1,6 @@
+import { isTauri, testrailRequest } from './tauriApi'
+import { urlToEndpoint } from './testrailEndpoint'
+
 // Cache zapytań do API, keyowany pełnym URL-em.
 //
 // Dwie warstwy:
@@ -54,9 +57,16 @@ export async function cachedFetch(url, { force = false, skipPersist = false } = 
   }
 
   const promise = (async () => {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`TestRail zwrócił błąd: ${res.status}`)
-    const data = await res.json()
+    // W wersji desktopowej (Tauri) nie ma PHP proxy — endpoint idzie
+    // bezpośrednio z Rusta do TestRail, po URL-u tylko rozpoznajemy, o co
+    // pytamy (patrz testrailEndpoint.js), reszta cache'owania jest wspólna.
+    const data = isTauri()
+        ? await testrailRequest(urlToEndpoint(url))
+        : await (async () => {
+          const res = await fetch(url)
+          if (!res.ok) throw new Error(`TestRail zwrócił błąd: ${res.status}`)
+          return res.json()
+        })()
     const entry = { data, timestamp: Date.now() }
     if (!skipPersist) writePersisted(url, entry)
     return entry

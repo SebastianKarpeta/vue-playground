@@ -5,6 +5,7 @@ import EntitySelect from '../components/EntitySelect.vue'
 import TestList from '../components/TestList.vue'
 import TestDetailModal from '../components/TestDetailModal.vue'
 import { useResizableWidth } from '../composables/useResizableWidth'
+import { useTheme } from '../composables/useTheme'
 import { cachedFetch } from '../composables/apiCache'
 import { formatRelativeTime } from '../composables/formatRelativeTime'
 
@@ -15,6 +16,7 @@ const router = useRouter()
 
 const contentEl = ref(null)
 const { startResize } = useResizableWidth('vue_playground_content_width', contentEl, 896)
+const { theme, toggleTheme } = useTheme()
 
 const projects = ref([])
 const milestones = ref([])
@@ -479,9 +481,20 @@ function closeTestModal() {
   <div class="min-h-screen bg-[var(--bg)]">
     <div class="px-6 py-10">
       <div ref="contentEl" class="relative mx-auto min-w-[280px]">
-        <header class="mb-8">
-          <h1 class="text-2xl font-semibold text-[var(--text-h)]">TestRail Dashboard</h1>
-          <p class="text-sm text-[var(--text)] mt-1">Przeglądaj projekty, milestone'y, runy i testy.</p>
+        <header class="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold text-[var(--text-h)]">TestRail Dashboard</h1>
+            <p class="text-sm text-[var(--text)] mt-1">Przeglądaj projekty, milestone'y, runy i testy.</p>
+          </div>
+          <button
+              data-testid="theme-toggle"
+              :title="theme === 'dark' ? 'Przełącz na tryb jasny' : 'Przełącz na tryb ciemny'"
+              @click="toggleTheme"
+              class="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-h)] hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
+          >
+            <span v-if="theme === 'dark'">☀️</span>
+            <span v-else>🌙</span>
+          </button>
         </header>
 
         <section class="relative bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-[var(--shadow)] p-5 mb-6">
