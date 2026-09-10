@@ -20,6 +20,19 @@ const props = defineProps({
   // (żeby F5 nie zrzucał z powrotem na stronę 1), więc to on jest źródłem
   // prawdy; zmiany wychodzą przez update:page.
   page: { type: Number, default: 1 },
+  // true, gdy w tle trwa ładowanie całego runu — blokuje TYLKO paginację
+  // (Wstecz/Dalej w trybie serwerowym odpaliłoby kolejne zapytanie do tego
+  // samego jednowątkowego serwera PHP, który już jest zajęty ładowaniem
+  // całości) i sortowanie po dacie (i tak sortowałoby tylko bieżącą,
+  // tymczasową stronę, która zaraz zostanie zastąpiona pełnym zbiorem).
+  // Wyszukiwanie, filtry dat i kliknięcie w wiersz zostają aktywne — nie
+  // kolidują z trwającym ładowaniem.
+  loadingBlockNav: { type: Boolean, default: false },
+  // true, gdy rodzic właśnie odpytuje serwer o nową stronę (np. po Wstecz/
+  // Dalej) — na ten czas `tests` jest tymczasowo puste, więc bez tego
+  // widać by było mylące "Brak testów pasujących do filtrów" zamiast
+  // informacji, że dane jeszcze idą.
+  testsLoading: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['select', 'next-page', 'prev-page', 'change-page-size', 'visible-tests-changed', 'update:page'])
@@ -97,7 +110,11 @@ function clearFilters() {
 const localPageSize = ref(props.pageSize)
 watch(() => props.pageSize, (v) => { localPageSize.value = v })
 
-watch([searchQuery, dateFrom, dateTo, dateFilterField, sortField, sortDirection, () => props.tests], () => {
+// Zmiana kryteriów (szukanie/filtr/sortowanie) pokazuje inny zbiór, więc
+// wraca na stronę 1. Samo odświeżenie danych (np. przycisk "Odśwież" albo
+// ponowne "Załaduj cały run") NIE jest tu nasłuchiwane — inaczej cichcem
+// zrzucałoby użytkownika ze strony 5 z powrotem na 1 przy każdym refreshu.
+watch([searchQuery, dateFrom, dateTo, dateFilterField, sortField, sortDirection], () => {
   if (props.page !== 1) emit('update:page', 1)
 })
 
@@ -106,6 +123,12 @@ const effectivePageSize = computed(() => (props.clientPaginate ? localPageSize.v
 const totalPages = computed(() =>
     props.clientPaginate ? Math.max(1, Math.ceil(sortedTests.value.length / effectivePageSize.value)) : 1
 )
+
+// Odświeżone (lub przefiltrowane) dane mogą mieć mniej stron niż wcześniej —
+// zamiast cichego pustego widoku, ściągnij bieżącą stronę do ostatniej ważnej.
+watch(totalPages, (total) => {
+  if (props.page > total) emit('update:page', total)
+})
 
 const visibleTests = computed(() => {
   if (!props.clientPaginate) return sortedTests.value
@@ -150,17 +173,21 @@ function formatDate(unixSeconds) {
   return dateFormatter.format(new Date(unixSeconds * 1000))
 }
 
+// Kolory z pełną krycją (nie /15 jak w plakietce) — ta komórka jest teraz
+// sticky (prawa kolumna), więc tło musi zasłaniać przewijaną zawartość pod
+// spodem, a nie tylko delikatnie ją podbarwiać.
 const statusMap = {
-  1: { label: 'Passed', class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400' },
-  2: { label: 'Blocked', class: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' },
-  3: { label: 'Untested', class: 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400' },
-  4: { label: 'Retest', class: 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400' },
-  5: { label: 'Failed', class: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400' },
+  1: { label: 'Passed', class: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200' },
+  2: { label: 'Blocked', class: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200' },
+  3: { label: 'Untested', class: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300' },
+  4: { label: 'Retest', class: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200' },
+  5: { label: 'Failed', class: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200' },
 }
 
 function statusInfo(statusId) {
   return statusMap[statusId] ?? { label: `Status ${statusId}`, class: 'bg-gray-100 text-gray-600' }
 }
+
 </script>
 
 <template>
@@ -172,10 +199,12 @@ function statusInfo(statusId) {
         Na stronę
         <select
             :value="effectivePageSize"
+            :disabled="testsLoading || loadingBlockNav"
             @change="onPageSizeChange"
             data-testid="tests-page-size"
             class="border border-[var(--border)] bg-[var(--surface)] rounded-md px-2 py-1 text-[var(--text-h)]
-                   focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+                   focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500
+                   disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <option :value="20">20</option>
           <option :value="50">50</option>
@@ -189,27 +218,29 @@ function statusInfo(statusId) {
         v-model="searchQuery"
         type="text"
         data-testid="tests-search"
+        :disabled="testsLoading || loadingBlockNav"
         :placeholder="clientPaginate ? 'Szukaj po nazwie lub numerze case (cały run)…' : 'Szukaj po nazwie lub numerze case (na tej stronie)…'"
         class="w-full border border-[var(--border)] bg-[var(--surface)] rounded-md px-3 py-1.5 mb-3 text-sm text-[var(--text-h)]
                placeholder:text-[var(--text)]/60
-               focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+               focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500
+               disabled:opacity-50 disabled:cursor-not-allowed"
     />
 
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 text-xs text-[var(--text)]">
-      <label class="flex items-center gap-1.5 cursor-pointer">
-        <input v-model="dateFilterField" type="radio" value="created" data-testid="filter-date-field-created" />
+      <label class="flex items-center gap-1.5" :class="(testsLoading || loadingBlockNav) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'">
+        <input v-model="dateFilterField" type="radio" value="created" :disabled="testsLoading || loadingBlockNav" data-testid="filter-date-field-created" />
         Utworzenie
       </label>
-      <label class="flex items-center gap-1.5 cursor-pointer">
-        <input v-model="dateFilterField" type="radio" value="modified" data-testid="filter-date-field-modified" />
+      <label class="flex items-center gap-1.5" :class="(testsLoading || loadingBlockNav) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'">
+        <input v-model="dateFilterField" type="radio" value="modified" :disabled="testsLoading || loadingBlockNav" data-testid="filter-date-field-modified" />
         Modyfikacja
       </label>
       <label class="flex items-center gap-1.5">
-        <input v-model="dateFrom" type="date" data-testid="filter-date-from" class="border border-[var(--border)] bg-[var(--surface)] rounded px-1.5 py-1 text-[var(--text-h)]" />
+        <input v-model="dateFrom" type="date" :disabled="testsLoading || loadingBlockNav" data-testid="filter-date-from" class="border border-[var(--border)] bg-[var(--surface)] rounded px-1.5 py-1 text-[var(--text-h)] disabled:opacity-50 disabled:cursor-not-allowed" />
         <span>–</span>
-        <input v-model="dateTo" type="date" data-testid="filter-date-to" class="border border-[var(--border)] bg-[var(--surface)] rounded px-1.5 py-1 text-[var(--text-h)]" />
+        <input v-model="dateTo" type="date" :disabled="testsLoading || loadingBlockNav" data-testid="filter-date-to" class="border border-[var(--border)] bg-[var(--surface)] rounded px-1.5 py-1 text-[var(--text-h)] disabled:opacity-50 disabled:cursor-not-allowed" />
       </label>
-      <button v-if="hasActiveFilter" data-testid="filter-tests-clear" @click="clearFilters" class="underline hover:no-underline">
+      <button v-if="hasActiveFilter" data-testid="filter-tests-clear" :disabled="testsLoading || loadingBlockNav" @click="clearFilters" class="underline hover:no-underline disabled:no-underline disabled:opacity-50 disabled:cursor-not-allowed">
         Wyczyść filtry
       </button>
     </div>
@@ -223,8 +254,9 @@ function statusInfo(statusId) {
             <th class="w-24 px-3 py-2 font-medium">
               <button
                   data-testid="sort-created"
+                  :disabled="loadingBlockNav || testsLoading"
                   @click="toggleSort('created')"
-                  class="flex items-center gap-1 font-medium hover:text-[var(--text-h)]"
+                  class="flex items-center gap-1 font-medium hover:text-[var(--text-h)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-inherit"
               >
                 Utworzono
                 <span v-if="sortField === 'created'">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
@@ -233,8 +265,9 @@ function statusInfo(statusId) {
             <th class="w-24 px-3 py-2 font-medium">
               <button
                   data-testid="sort-modified"
+                  :disabled="loadingBlockNav || testsLoading"
                   @click="toggleSort('modified')"
-                  class="flex items-center gap-1 font-medium hover:text-[var(--text-h)]"
+                  class="flex items-center gap-1 font-medium hover:text-[var(--text-h)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-inherit"
               >
                 Zmieniono
                 <span v-if="sortField === 'modified'">{{ sortDirection === 'asc' ? '▲' : '▼' }}</span>
@@ -248,9 +281,12 @@ function statusInfo(statusId) {
               v-for="t in visibleTests"
               :key="t.id"
               data-testid="test-item"
-              @click="emit('select', t.id)"
-              class="cursor-pointer hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
-              :class="{ 'bg-emerald-500/10 font-medium': t.id === selectedTestId }"
+              @click="!(testsLoading || loadingBlockNav) && emit('select', t.id)"
+              class="transition-colors"
+              :class="[
+                (testsLoading || loadingBlockNav) ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-black/[0.03] dark:hover:bg-white/[0.04]',
+                { 'bg-emerald-500/10 font-medium': t.id === selectedTestId },
+              ]"
           >
             <td
                 class="sticky left-0 z-10 px-3 py-2 truncate border-r border-[var(--border)]"
@@ -262,17 +298,25 @@ function statusInfo(statusId) {
             <td class="px-3 py-2 text-xs truncate" data-testid="test-item-created">{{ formatDate(caseDates[t.id]?.created_on) }}</td>
             <td class="px-3 py-2 text-xs truncate" data-testid="test-item-modified">{{ formatDate(caseDates[t.id]?.updated_on) }}</td>
             <td
-                class="sticky right-0 z-10 px-3 py-2 text-center border-l border-[var(--border)]"
+                class="relative sticky right-0 z-10 text-center border-l border-[var(--border)]"
                 :class="t.id === selectedTestId ? 'bg-emerald-500/10' : 'bg-[var(--surface)]'"
             >
-              <span class="inline-block w-20 text-center px-2 py-0.5 rounded-full text-xs font-medium" :class="statusInfo(t.status_id).class">
+              <div class="absolute inset-px flex items-center justify-center rounded text-xs font-medium" :class="statusInfo(t.status_id).class">
                 {{ statusInfo(t.status_id).label }}
-              </span>
+              </div>
             </td>
           </tr>
           <tr v-if="visibleTests.length === 0">
             <td colspan="5" class="px-3 py-3 text-sm text-[var(--text)]">
-              Brak testów pasujących do filtrów.
+              <div
+                  v-if="testsLoading"
+                  data-testid="tests-loading-spinner"
+                  class="flex items-center justify-center gap-2 min-h-[240px]"
+              >
+                <span class="inline-block w-4 h-4 shrink-0 rounded-full border-2 border-[var(--border)] border-t-emerald-500 animate-spin"></span>
+                Ładowanie testów…
+              </div>
+              <template v-else>Brak testów pasujących do filtrów.</template>
             </td>
           </tr>
         </tbody>
@@ -282,7 +326,7 @@ function statusInfo(statusId) {
     <div v-if="clientPaginate" class="flex flex-wrap items-center gap-1 mt-4 text-sm">
       <button
           data-testid="tests-prev"
-          :disabled="props.page === 1"
+          :disabled="loadingBlockNav || testsLoading || props.page === 1"
           @click="goToPage(props.page - 1)"
           class="px-2.5 py-1 rounded-md border border-[var(--border)] text-[var(--text-h)]
                  hover:bg-black/[0.03] dark:hover:bg-white/[0.04]
@@ -295,18 +339,19 @@ function statusInfo(statusId) {
         <button
             v-else
             :data-testid="`tests-page-${p}`"
+            :disabled="loadingBlockNav || testsLoading"
             @click="goToPage(p)"
-            class="px-2.5 py-1 rounded-md border text-sm transition-colors"
+            class="px-2.5 py-1 rounded-md border text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             :class="p === props.page
                 ? 'bg-emerald-500/15 border-emerald-500 text-[var(--text-h)] font-medium'
-                : 'border-[var(--border)] text-[var(--text)] hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'"
+                : 'border-[var(--border)] text-[var(--text)] enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
         >
           {{ p }}
         </button>
       </template>
       <button
           data-testid="tests-next"
-          :disabled="props.page === totalPages"
+          :disabled="loadingBlockNav || testsLoading || props.page === totalPages"
           @click="goToPage(props.page + 1)"
           class="px-2.5 py-1 rounded-md border border-[var(--border)] text-[var(--text-h)]
                  hover:bg-black/[0.03] dark:hover:bg-white/[0.04]
@@ -319,7 +364,7 @@ function statusInfo(statusId) {
     <div v-else class="flex gap-2 mt-4">
       <button
           data-testid="tests-prev"
-          :disabled="!hasPrev"
+          :disabled="loadingBlockNav || testsLoading || !hasPrev"
           @click="emit('prev-page')"
           class="px-3 py-1.5 rounded-md border border-[var(--border)] text-sm text-[var(--text-h)]
                  hover:bg-black/[0.03] dark:hover:bg-white/[0.04]
@@ -329,7 +374,7 @@ function statusInfo(statusId) {
       </button>
       <button
           data-testid="tests-next"
-          :disabled="!hasNext"
+          :disabled="loadingBlockNav || testsLoading || !hasNext"
           @click="emit('next-page')"
           class="px-3 py-1.5 rounded-md border border-[var(--border)] text-sm text-[var(--text-h)]
                  hover:bg-black/[0.03] dark:hover:bg-white/[0.04]

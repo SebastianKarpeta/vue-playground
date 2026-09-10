@@ -31,6 +31,7 @@ const selectedTest = ref(null)
 const testResultCounts = ref({})
 const testCaseDates = ref({})
 const fullTests = ref(null) // null = nie wczytano całego runu; Array po wczytaniu
+const hasCachedFullDataset = ref(false) // czy dla bieżącego runu jest już snapshot w sessionStorage
 const fullDatasetLoading = ref(false)
 const fullDatasetProgress = ref('')
 const clientStatusFilter = ref(null) // filtr statusu używany tylko w trybie pełnym
@@ -306,18 +307,29 @@ function loadFullDatasetSnapshot(runId) {
   }
 }
 
-watch([selectedRunId, testsOffset, testsLimit, testsStatusFilter], ([runId, offset]) => {
+// Osobny watcher TYLKO na zmianę runu (nie na offset/limit/status) — inaczej
+// zwykłe "Dalej"/"Wstecz" w trybie serwerowym (zmienia offset) na nowo
+// odpytywałoby snapshot i wracało do trybu pełnego, mimo że użytkownik
+// świadomie z niego wyszedł przez "Wróć do stronicowania serwerowego".
+// Tu żyje restart stanu trybu pełnego: przy realnej zmianie runu (albo
+// starcie/F5) sprawdzamy, czy jest zapisany snapshot i wracamy do niego.
+watch(selectedRunId, (runId) => {
   fullTests.value = null
   clientStatusFilter.value = null
-  loadTests(runId, offset)
+  hasCachedFullDataset.value = false
 
   if (runId) {
     const snapshot = loadFullDatasetSnapshot(runId)
     if (snapshot) {
       fullTests.value = snapshot.tests
       testCaseDates.value = { ...testCaseDates.value, ...snapshot.dates }
+      hasCachedFullDataset.value = true
     }
   }
+}, { immediate: true })
+
+watch([selectedRunId, testsOffset, testsLimit, testsStatusFilter], ([runId, offset]) => {
+  loadTests(runId, offset)
 }, { immediate: true })
 
 async function loadFullDataset(force = false) {
@@ -381,6 +393,7 @@ async function loadFullDataset(force = false) {
 
     fullTests.value = all
     saveFullDatasetSnapshot(selectedRunId.value, all, datesByTestId)
+    hasCachedFullDataset.value = true
   } catch (e) {
     error.value = e.message
   } finally {
@@ -443,14 +456,18 @@ async function refreshAll() {
 
   if (selectedRunId.value) {
     await loadTests(selectedRunId.value, testsOffset.value, true)
-    if (fullMode.value) {
-      await loadFullDataset(true) // tryb pełny był aktywny — wymuś świeże pobranie całości
-    }
+    // Celowo NIE odświeżamy tu całego wczytanego runu — dla dużych runów to
+    // ~10 minut pobierania, a zwykłe "Odśwież" ma być szybkie. Jawne
+    // odświeżenie pełnego zbioru robi osobny przycisk (refreshFullDataset).
   }
 }
 
+async function refreshFullDataset() {
+  await loadFullDataset(true)
+}
+
 function openTest(testId) {
-  selectedTest.value = tests.value.find((t) => t.id === testId) ?? null
+  selectedTest.value = effectiveTests.value.find((t) => t.id === testId) ?? null
 }
 
 function closeTestModal() {
@@ -473,6 +490,7 @@ function closeTestModal() {
                 label="Projekt"
                 :items="projects"
                 :selected-id="selectedProjectId"
+                :disabled="fullDatasetLoading || loading"
                 @select="selectProject"
             />
 
@@ -480,7 +498,7 @@ function closeTestModal() {
                 label="Milestone"
                 :items="milestones"
                 :selected-id="selectedMilestoneId"
-                :disabled="!milestonesEnabled"
+                :disabled="!milestonesEnabled || fullDatasetLoading || loading"
                 @select="selectMilestone"
             />
 
@@ -488,7 +506,7 @@ function closeTestModal() {
                 label="Run"
                 :items="runs"
                 :selected-id="selectedRunId"
-                :disabled="!runsEnabled"
+                :disabled="!runsEnabled || fullDatasetLoading || loading"
                 @select="selectRun"
             />
           </div>
@@ -514,7 +532,12 @@ function closeTestModal() {
             :class="isStale ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--text)]'"
         >
           <span>{{ isStale ? '⚠ Dane mogą być nieaktualne' : 'Zaktualizowano' }} ({{ lastFetchedLabel }}).</span>
-          <button data-testid="refresh-data" @click="refreshAll" class="underline hover:no-underline">
+          <button
+              data-testid="refresh-data"
+              :disabled="fullDatasetLoading"
+              @click="refreshAll"
+              class="underline hover:no-underline disabled:no-underline disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Odśwież
           </button>
         </div>
@@ -526,7 +549,7 @@ function closeTestModal() {
           <div v-if="selectedRun" class="flex items-center gap-2 text-sm mb-4">
           <button
               data-testid="filter-passed"
-              :disabled="selectedRun.passed_count === 0"
+              :disabled="selectedRun.passed_count === 0 || loading || fullDatasetLoading"
               @click="filterByStatus(1)"
               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-emerald-600 dark:text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-default"
               :class="activeStatusFilter === 1 ? 'bg-emerald-500/15 ring-1 ring-emerald-500/50' : 'enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
@@ -535,7 +558,7 @@ function closeTestModal() {
           </button>
           <button
               data-testid="filter-failed"
-              :disabled="selectedRun.failed_count === 0"
+              :disabled="selectedRun.failed_count === 0 || loading || fullDatasetLoading"
               @click="filterByStatus(5)"
               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-red-500 transition-colors disabled:opacity-40 disabled:cursor-default"
               :class="activeStatusFilter === 5 ? 'bg-red-500/15 ring-1 ring-red-500/50' : 'enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
@@ -544,7 +567,7 @@ function closeTestModal() {
           </button>
           <button
               data-testid="filter-blocked"
-              :disabled="selectedRun.blocked_count === 0"
+              :disabled="selectedRun.blocked_count === 0 || loading || fullDatasetLoading"
               @click="filterByStatus(2)"
               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-amber-500 transition-colors disabled:opacity-40 disabled:cursor-default"
               :class="activeStatusFilter === 2 ? 'bg-amber-500/15 ring-1 ring-amber-500/50' : 'enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
@@ -553,7 +576,7 @@ function closeTestModal() {
           </button>
           <button
               data-testid="filter-retest"
-              :disabled="selectedRun.retest_count === 0"
+              :disabled="selectedRun.retest_count === 0 || loading || fullDatasetLoading"
               @click="filterByStatus(4)"
               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-sky-500 transition-colors disabled:opacity-40 disabled:cursor-default"
               :class="activeStatusFilter === 4 ? 'bg-sky-500/15 ring-1 ring-sky-500/50' : 'enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
@@ -562,7 +585,7 @@ function closeTestModal() {
           </button>
           <button
               data-testid="filter-untested"
-              :disabled="selectedRun.untested_count === 0"
+              :disabled="selectedRun.untested_count === 0 || loading || fullDatasetLoading"
               @click="filterByStatus(3)"
               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[var(--text)] transition-colors disabled:opacity-40 disabled:cursor-default"
               :class="activeStatusFilter === 3 ? 'bg-black/[0.06] dark:bg-white/[0.08] ring-1 ring-[var(--border)]' : 'enabled:hover:bg-black/[0.03] enabled:dark:hover:bg-white/[0.04]'"
@@ -572,8 +595,9 @@ function closeTestModal() {
           <button
               v-if="activeStatusFilter"
               data-testid="filter-clear"
+              :disabled="loading || fullDatasetLoading"
               @click="filterByStatus(null)"
-              class="text-xs text-[var(--text)] underline ml-1"
+              class="text-xs text-[var(--text)] underline ml-1 disabled:no-underline disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Wyczyść filtr
           </button>
@@ -588,15 +612,33 @@ function closeTestModal() {
           <button
               v-if="!fullMode"
               data-testid="load-full-run"
-              :disabled="fullDatasetLoading"
-              @click="loadFullDataset"
+              :disabled="fullDatasetLoading || loading"
+              @click="loadFullDataset()"
               class="underline hover:no-underline disabled:no-underline disabled:opacity-60"
           >
-            {{ fullDatasetLoading ? fullDatasetProgress || 'Ładowanie…' : 'Załaduj cały run (sortowanie/filtrowanie po wszystkim)' }}
+            {{ fullDatasetLoading
+              ? fullDatasetProgress || 'Ładowanie…'
+              : hasCachedFullDataset
+                ? 'Wróć do trybu pełnego (bez ponownego pobierania)'
+                : 'Załaduj cały run (sortowanie/filtrowanie po wszystkim)' }}
           </button>
           <template v-else>
-            <span>Wczytano cały run ({{ fullTests.length }} testów).</span>
-            <button data-testid="exit-full-run" @click="exitFullMode" class="underline hover:no-underline">
+            <span v-if="fullDatasetLoading" data-testid="full-run-progress">{{ fullDatasetProgress || 'Odświeżanie…' }}</span>
+            <span v-else>Wczytano cały run ({{ fullTests.length }} testów).</span>
+            <button
+                data-testid="refresh-full-run"
+                :disabled="fullDatasetLoading"
+                @click="refreshFullDataset"
+                class="underline hover:no-underline disabled:no-underline disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Odśwież cały zbiór
+            </button>
+            <button
+                data-testid="exit-full-run"
+                :disabled="fullDatasetLoading"
+                @click="exitFullMode"
+                class="underline hover:no-underline disabled:no-underline disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               Wróć do stronicowania serwerowego
             </button>
           </template>
@@ -609,6 +651,8 @@ function closeTestModal() {
             :has-next="testsHasNext && pageDetailsLoaded"
             :has-prev="testsHasPrev && pageDetailsLoaded"
             :details-loading="!pageDetailsLoaded"
+            :loading-block-nav="fullDatasetLoading"
+            :tests-loading="loading"
             :result-counts="testResultCounts"
             :case-dates="testCaseDates"
             :client-paginate="fullMode"
